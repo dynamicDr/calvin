@@ -1,11 +1,10 @@
 import argparse
-from collections import Counter, defaultdict
+from collections import defaultdict
 import logging
-import os
 from pathlib import Path
 import sys
 import time
-
+from my_vla_model import MyVLAModel
 # This is for using the locally installed repo clone when using slurm
 from calvin_agent.models.calvin_base_model import CalvinBaseModel
 
@@ -24,19 +23,14 @@ from calvin_agent.evaluation.utils import (
 )
 from calvin_agent.utils.utils import get_all_checkpoints, get_checkpoints_for_epochs, get_last_checkpoint
 import hydra
-import numpy as np
 from omegaconf import OmegaConf
 from pytorch_lightning import seed_everything
 from termcolor import colored
-import torch
 from tqdm.auto import tqdm
 
 from calvin_env.envs.play_table_env import get_env
 
 logger = logging.getLogger(__name__)
-
-EP_LEN = 360
-NUM_SEQUENCES = 1000
 
 
 def get_epoch(checkpoint):
@@ -76,7 +70,7 @@ class CustomModel(CalvinBaseModel):
         raise NotImplementedError
 
 
-def evaluate_policy(model, env, epoch, eval_log_dir=None, debug=False, create_plan_tsne=False):
+def evaluate_policy(model, env, epoch, num_sequences, ep_len, eval_log_dir=None, debug=False, create_plan_tsne=False):
     """
     Run this function to evaluate a model on the CALVIN challenge.
 
@@ -84,6 +78,8 @@ def evaluate_policy(model, env, epoch, eval_log_dir=None, debug=False, create_pl
         model: Must implement methods of CalvinBaseModel.
         env: (Wrapped) calvin env.
         epoch:
+        num_sequences: Number of sequences to evaluate.
+        ep_len: Maximum steps per subtask.
         eval_log_dir: Path where to log evaluation results. If None, logs to /tmp/evaluation/
         debug: If True, show camera view and debug info.
         create_plan_tsne: Collect data for TSNE plots of latent plans (does not work for your custom model)
@@ -98,7 +94,7 @@ def evaluate_policy(model, env, epoch, eval_log_dir=None, debug=False, create_pl
 
     eval_log_dir = get_log_dir(eval_log_dir)
 
-    eval_sequences = get_sequences(NUM_SEQUENCES)
+    eval_sequences = get_sequences(num_sequences)
 
     results = []
     plans = defaultdict(list)
@@ -107,7 +103,7 @@ def evaluate_policy(model, env, epoch, eval_log_dir=None, debug=False, create_pl
         eval_sequences = tqdm(eval_sequences, position=0, leave=True)
 
     for initial_state, eval_sequence in eval_sequences:
-        result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug)
+        result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, ep_len, debug)
         results.append(result)
         if not debug:
             eval_sequences.set_description(
@@ -121,7 +117,7 @@ def evaluate_policy(model, env, epoch, eval_log_dir=None, debug=False, create_pl
     return results
 
 
-def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, plans, debug):
+def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, plans, ep_len, debug):
     """
     Evaluates a sequence of language instructions.
     """
@@ -136,7 +132,7 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         print(f"Evaluating sequence: {' -> '.join(eval_sequence)}")
         print("Subtask: ", end="")
     for subtask in eval_sequence:
-        success = rollout(env, model, task_checker, subtask, val_annotations, plans, debug)
+        success = rollout(env, model, task_checker, subtask, val_annotations, plans, ep_len, debug)
         if success:
             success_counter += 1
         else:
@@ -144,7 +140,7 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
     return success_counter
 
 
-def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug):
+def rollout(env, model, task_oracle, subtask, val_annotations, plans, ep_len, debug):
     """
     Run the actual rollout on one subtask (which is one natural language instruction).
     """
@@ -157,7 +153,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug):
     model.reset()
     start_info = env.get_info()
 
-    for step in range(EP_LEN):
+    for step in range(ep_len):
         action = model.step(obs, lang_annotation)
         obs, _, _, current_info = env.step(action)
         if debug:
@@ -216,13 +212,26 @@ def main():
     parser.add_argument("--eval_log_dir", default=None, type=str, help="Where to log the evaluation results.")
 
     parser.add_argument("--device", default=0, type=int, help="CUDA device")
+
+    # 新增的参数
+    parser.add_argument("--num_sequences", type=int, default=1000, help="Number of sequences to evaluate.")
+    parser.add_argument("--ep_len", type=int, default=360, help="Maximum steps per subtask.")
+
     args = parser.parse_args()
 
     # evaluate a custom model
     if args.custom_model:
-        model = CustomModel()
+        model = MyVLAModel()
         env = make_env(args.dataset_path)
-        evaluate_policy(model, env, debug=args.debug)
+        evaluate_policy(
+            model,
+            env,
+            epoch=0,
+            num_sequences=args.num_sequences,
+            ep_len=args.ep_len,
+            eval_log_dir=args.eval_log_dir,
+            debug=args.debug
+        )
     else:
         assert "train_folder" in args
 
@@ -249,7 +258,16 @@ def main():
                 env=env,
                 device_id=args.device,
             )
-            evaluate_policy(model, env, epoch, eval_log_dir=args.eval_log_dir, debug=args.debug, create_plan_tsne=True)
+            evaluate_policy(
+                model,
+                env,
+                epoch,
+                num_sequences=args.num_sequences,
+                ep_len=args.ep_len,
+                eval_log_dir=args.eval_log_dir,
+                debug=args.debug,
+                create_plan_tsne=True
+            )
 
 
 if __name__ == "__main__":
