@@ -1,0 +1,3 @@
+
+
+python calvin_models/calvin_agent/evaluation/evaluate_policy.py     --dataset_path $CALVIN_ROOT/dataset/calvin_debug_dataset     --custom_model     --num_sequences
