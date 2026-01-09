@@ -1,1 +1,3 @@
-python calvin_models/calvin_agent/evaluation/evaluate_policy.py     --dataset_path dataset/calvin_debug_dataset     --custom_model     --num_sequences 100
+cd $CALVIN_ROOT
+conda activate calvin_venv
+python calvin_models/calvin_agent/evaluation/evaluate_policy.py     --dataset_path dataset/calvin_debug_dataset     --custom_model     --num_sequences 1
